@@ -177,6 +177,7 @@ function App() {
 
     // 1. Prepare input features (for ML model)
     const inputFeatures = {
+      projectName: form.projectName.value,
       budget: form.budget.value,
       location: form.location.value,
       towerType: form.towerType.value,
@@ -386,15 +387,28 @@ const handleSignup = async (e) => {
     const email = form.email.value;
     const password = form.password.value;
     const role = form.role.value;
-    const state = form.state.value;
     const adminLevel = form.admin_level ? form.admin_level.value : null;
+    
+    // Only include state if not a central admin
+    const signupData = { 
+      name, 
+      email, 
+      password, 
+      role, 
+      admin_level: adminLevel 
+    };
+    
+    // Add state only if not a central admin
+    if (role === 'employee' || (role === 'admin' && adminLevel === 'state')) {
+      signupData.state = form.state.value;
+    }
 
     try {
       const response = await fetch(`${API_URL}/auth/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // Send all registration fields to the Flask backend including admin_level
-        body: JSON.stringify({ name, email, password, role, state, admin_level: adminLevel }),
+        body: JSON.stringify(signupData),
       });
 
       const responseData = await response.json();
@@ -546,10 +560,12 @@ const handleSignup = async (e) => {
                   ✅ The prediction engine successfully ran forecasts for all 7 key materials.
                 </p>
               </div>
-              <h3 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-3">
-                <div className="h-1 w-8 bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full"></div>
-                Latest Project Details (ID: {lastProject.id})
+              <h3 className="text-2xl font-bold text-gray-900 mb-2">
+                {lastProject.projectName || 'Project Details'}
               </h3>
+              <p className="text-gray-600 mb-6 flex items-center gap-2">
+                <span className="text-sm bg-gray-100 px-2 py-1 rounded-full">ID: {lastProject.id}</span>
+              </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="p-6 rounded-2xl bg-gradient-to-br from-gray-50 to-white border border-gray-200/50">
                   <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Project Information</h4>
@@ -654,7 +670,7 @@ const handleSignup = async (e) => {
                     <div className="flex-1">
                       <div className="flex items-center gap-3 mb-2">
                         <div className="h-2 w-2 rounded-full bg-purple-500"></div>
-                        <h4 className="text-xl font-bold text-gray-900">Project ID: {project.id} in {project.location}</h4>
+                        <h4 className="text-xl font-bold text-gray-900">Project ID: {project.id} in {project.location} - {project.projectName || ''}</h4>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                         <div>
@@ -929,7 +945,7 @@ const handleSignup = async (e) => {
                           <div className="flex items-center gap-3">
                             <div className="h-2 w-2 rounded-full bg-emerald-500"></div>
                             <h4 className="text-lg font-bold text-gray-900 truncate">
-                              {project.location}
+                              {project.location} - {project.projectName || ''}
                             </h4>
                           </div>
                           {getStatusBadge(project.status)}
@@ -1168,6 +1184,16 @@ const handleSignup = async (e) => {
                 </div>
               </div>
               <form className="space-y-6" onSubmit={handleCreateProject}>
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-gray-700">Project Name</label>
+                  <input
+                    name="projectName"
+                    type="text"
+                    placeholder="e.g., Mumbai Metro Expansion"
+                    className="w-full p-4 border border-gray-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 bg-gray-50/50"
+                    required
+                  />
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-2">
                     <label className="text-sm font-semibold text-gray-700">Budget (INR)</label>
@@ -1365,7 +1391,8 @@ const handleSignup = async (e) => {
                       <select 
                         name="state" 
                         className="w-full p-4 border border-gray-200 rounded-2xl bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 text-gray-700" 
-                        required={selectedAdminLevel !== 'central'}
+                        required={selectedRole === 'employee' || (selectedRole === 'admin' && selectedAdminLevel === 'state')}
+                        disabled={selectedRole === 'admin' && selectedAdminLevel !== 'state'}
                       >
                         <option value="">Select State</option>
                         {Object.keys(stateMapping).map((state) => (

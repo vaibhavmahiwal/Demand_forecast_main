@@ -27,18 +27,19 @@ load_dotenv(BASE_DIR / '.env')
 app = Flask(__name__)
 CORS(app) 
 
-# Configure Database - Use SQLite for development if no DATABASE_URL is set
-database_url = os.environ.get('DATABASE_URL')
-if not database_url:
-    # Use SQLite as fallback for development
-    database_url = 'sqlite:///demand_forecast.db'
+# Configure Database - Always use SQLite for development
+database_url = 'sqlite:///demand_forecast.db'
     
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'FALLBACK_NEVER_USE_THIS_IN_PROD') 
 
 db = SQLAlchemy(app)
-bcrypt = Bcrypt(app) 
+bcrypt = Bcrypt(app)
+
+# Initialize Flask-Migrate
+from flask_migrate import Migrate
+migrate = Migrate(app, db)
 CITY_TO_STATE_MAP = {
     "Lucknow": "Uttar Pradesh", 
     "Kanpur": "Uttar Pradesh", 
@@ -81,6 +82,7 @@ class User(db.Model):
 class Project(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     # INCREASED LENGTHS to prevent data truncation errors during database save
+    project_name = db.Column(db.String(200), nullable=False, default='Unnamed Project')
     budget = db.Column(db.String(100), nullable=False) # Increased from 50
     location = db.Column(db.String(100), nullable=False) # Increased from 50
     tower_type = db.Column(db.String(100), nullable=False) # Increased from 50
@@ -99,6 +101,7 @@ class Project(db.Model):
         # Parses the stored JSON string back into a Python dictionary for the frontend
         return {
             'id': self.id,
+            'projectName': self.project_name,
             'budget': self.budget,
             'location': self.location,
             'towerType': self.tower_type,
@@ -261,11 +264,13 @@ def signup():
     if not all([email, password, role]):
         return jsonify({"message": "Missing required fields"}), 400
         
-    if role == 'admin' and not data.get('admin_level'):
-        return jsonify({"message": "Admin level is required for admin users"}), 400
+    if role == 'admin':
+        if not data.get('admin_level'):
+            return jsonify({"message": "Admin level is required for admin users"}), 400
         
-    if role == 'admin' and not data.get('state'):
-        return jsonify({"message": "State is required for admin users"}), 400
+        # Only require state for state admins, not for central admins
+        if data.get('admin_level') == 'state' and not data.get('state'):
+            return jsonify({"message": "State is required for state admin users"}), 400
     
     if User.query.filter_by(email=email).first():
         return jsonify({"message": "User already exists"}), 409
@@ -507,6 +512,7 @@ def project_management(project_id=None):
         # IMPORTANT: Ensure the values passed here match the SQLAlchemy model's constraints (String/length)
         new_project = Project(
             # Pass original input strings/values for database save (no float conversion needed here)
+            project_name=input_features.get('projectName', 'Unnamed Project'),
             budget=str(input_features['budget']), # Convert back to string just in case, for DB save
             location=input_features['location'], 
             tower_type=input_features['towerType'],
