@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 // Assuming Map component is defined elsewhere or not strictly required for app logic review
 // import Map from './Map'; 
 
+
 // Keyframes for Tailwind CSS animations (must be defined in head or style tag)
 const tailwindConfig = `
   <script src="https://cdn.tailwindcss.com"></script>
@@ -71,6 +72,7 @@ function App() {
   const [showDashboard, setShowDashboard] = useState(false);
   const [showProjects, setShowProjects] = useState(false);
   const [showAdminDashboard, setShowAdminDashboard] = useState(false);
+  const [selectedRole, setSelectedRole] = useState("");
 
   // Flask API URL (FIXED: Using 127.0.0.1 for stability)
   const API_URL = "http://127.0.0.1:5002/api";
@@ -147,12 +149,28 @@ function App() {
     return "Unknown";
   };
 
-  // Filter projects for admin based on their state
+  // Filter projects for admin based on their admin level and state
   const getAdminProjects = () => {
     if (userData.role !== "admin") return [];
-    return projects.filter((project) => {
-      const projectState = getUserState(project.location);
-      return projectState === userData.state;
+    
+    // The backend now handles filtering, but we can add additional filtering here if needed
+    return projects.map(project => {
+      // Add a status label for display
+      let statusLabel = project.status;
+      if (project.status === 'pending') {
+        statusLabel = 'Pending State Approval';
+      } else if (project.status === 'pending central approval') {
+        statusLabel = 'Pending Central Approval';
+      } else if (project.status === 'approved') {
+        statusLabel = 'Approved';
+      } else if (project.status === 'declined') {
+        statusLabel = 'Declined';
+      }
+      
+      return {
+        ...project,
+        statusLabel
+      };
     });
   };
 
@@ -177,9 +195,19 @@ function App() {
     };
 
     // 2. Prepare project details (for DB save)
+    let status = "pending"; // Default for employees
+    
+    if (userData.role === "admin") {
+      if (userData.admin_level === "central") {
+        status = "approved"; // Central admin projects are auto-approved
+      } else if (userData.admin_level === "state") {
+        status = "pending central approval"; // State admin projects need central approval
+      }
+    }
+    
     const projectDetails = {
       createdBy: userData.email, 
-      status: userData.role === "admin" ? "approved" : "pending",
+      status: status,
       createdAt: new Date().toLocaleString(),
     };
 
@@ -214,11 +242,19 @@ function App() {
       setModals({ ...modals, project: false });
 
       setShowDashboard(true);
-      showCustomMessage(
-        userData.role === "admin" 
-          ? "Demand forecasted and approved! (DB ID: " + newProject.id + ")" 
-          : "Demand forecasted! Awaiting admin approval. (DB ID: " + newProject.id + ")"
-      );
+      let successMessage = `Demand forecasted! (DB ID: ${newProject.id})`;
+      
+      if (userData.role === "admin") {
+        if (userData.admin_level === "central") {
+          successMessage = `Demand forecasted and auto-approved! (DB ID: ${newProject.id})`;
+        } else if (userData.admin_level === "state") {
+          successMessage = `Demand forecasted! Awaiting central admin approval. (DB ID: ${newProject.id})`;
+        }
+      } else {
+        successMessage = `Demand forecasted! Awaiting state admin approval. (DB ID: ${newProject.id})`;
+      }
+      
+      showCustomMessage(successMessage);
     } catch (error) {
       showCustomMessage(`Error: ${error.message}`);
       console.error("Error creating project:", error);
@@ -271,43 +307,74 @@ function App() {
     }
   };
 
-  // --- FIXED: Admin project action (PUT to Flask for persistence) ---
+  // --- Enhanced Admin project action with role-based validation ---
   const handleProjectAction = async (projectId, action) => {
-    
     // Check if the current user is an Admin
     if (userData.role !== 'admin') {
-        showCustomMessage("Error: Only Administrators can perform project actions.");
+      showCustomMessage("Error: Only Administrators can perform project actions.");
+      return;
+    }
+
+    // Find the project being acted upon
+    const project = projects.find(p => p.id === projectId);
+    if (!project) {
+      showCustomMessage('Error: Project not found');
+      return;
+    }
+
+    // State admin validations
+    if (userData.admin_level === 'state') {
+      // State admins can only approve pending projects in their state
+      if (action === 'approved' && project.status !== 'pending') {
+        showCustomMessage('Only pending projects can be approved at state level');
         return;
+      }
+      
+      // Check if project is in admin's state
+      const projectState = Object.entries(stateMapping).find(([state, cities]) => 
+        cities.includes(project.location)
+      )?.[0];
+      
+      if (projectState !== userData.state) {
+        showCustomMessage('You can only approve projects in your state');
+        return;
+      }
+    }
+
+    // Central admin validations
+    if (userData.admin_level === 'central' && action === 'approved' && 
+        project.status !== 'pending central approval') {
+      showCustomMessage('Only projects pending central approval can be approved at central level');
+      return;
     }
     
     try {
-      // This PUT request sends the updated status and the admin's email for auth.
-      // NOTE: Flask backend needs a PUT route for /api/projects/<id> that handles status updates.
       const response = await fetch(`${API_URL}/projects/${projectId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
-          email: userData.email, // Auth token proxy
-          status: action 
+          email: userData.email,
+          status: action
         }), 
       });
 
       if (!response.ok) {
-        // If the Flask server hasn't implemented the PUT/PATCH update route yet,
-        // it will likely return 405 Method Not Allowed or 400.
         const errorData = await response.json();
         throw new Error(errorData.message || `Failed to ${action} project.`);
       }
 
-      // Update successful on server, refresh the local list from DB
+      // Refresh projects after successful update
       await fetchProjects(userData.email); 
-
-      logActivity(`${action.charAt(0).toUpperCase() + action.slice(1)} project ID: ${projectId} via API.`);
-      showCustomMessage(`Project ${action} successfully!`);
+      
+      // Show appropriate success message
+      const actionText = action === 'approved' ? 'approved' : 'rejected';
+      logActivity(`${actionText} project ID: ${projectId}`);
+      showCustomMessage(`Project ${actionText} successfully!`);
 
     } catch (error) {
-      showCustomMessage(`Error updating project: ${error.message}`);
       console.error(`Error updating project ${projectId}:`, error);
+      showCustomMessage(`Error: ${error.message}`);
+      
       // Fallback for demonstration if API fails (temporarily update local state)
       setProjects((prev) =>
         prev.map((project) => {
@@ -329,13 +396,14 @@ const handleSignup = async (e) => {
     const password = form.password.value;
     const role = form.role.value;
     const state = form.state.value;
+    const adminLevel = form.admin_level ? form.admin_level.value : null;
 
     try {
       const response = await fetch(`${API_URL}/auth/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // Send all registration fields to the Flask backend
-        body: JSON.stringify({ name, email, password, role, state }),
+        // Send all registration fields to the Flask backend including admin_level
+        body: JSON.stringify({ name, email, password, role, state, admin_level: adminLevel }),
       });
 
       const responseData = await response.json();
@@ -351,12 +419,14 @@ const handleSignup = async (e) => {
         email: responseData.user.email,
         role: responseData.user.role,
         state: responseData.user.state,
+        admin_level: responseData.user.admin_level,
       };
 
       setUserData(loggedInUser);
       logActivity("Account created and logged in via API.");
       showCustomMessage(`Account created successfully! Welcome, ${loggedInUser.name}.`);
       setModals({ project: false, signup: false, login: false, projectDetails: false });
+      setSelectedRole("");
 
     } catch (error) {
       showCustomMessage(`Signup Error: ${error.message}`);
@@ -391,6 +461,7 @@ const handleSignup = async (e) => {
         email: responseData.user.email,
         role: responseData.user.role,
         state: responseData.user.state,
+        admin_level: responseData.user.admin_level,
       };
       
       setUserData(loggedInUser);
@@ -432,15 +503,21 @@ const handleSignup = async (e) => {
   };
 
   const getStatusBadge = (status) => {
+    const statusText = status?.toLowerCase() || '';
+    
     const colors = {
       pending: "bg-yellow-100 text-yellow-800 ring-yellow-300/50",
+      'pending state approval': "bg-yellow-100 text-yellow-800 ring-yellow-300/50",
+      'pending central approval': "bg-orange-100 text-orange-800 ring-orange-300/50",
+      'pending central': "bg-orange-100 text-orange-800 ring-orange-300/50",
       approved: "bg-green-100 text-green-800 ring-green-300/50",
+      "auto-approved": "bg-emerald-100 text-emerald-800 ring-emerald-300/50",
       declined: "bg-red-100 text-red-800 ring-red-300/50",
       deleted: "bg-gray-100 text-gray-800 ring-gray-300/50",
     };
     return (
       <span
-        className={`px-2 py-1 rounded-full text-xs font-semibold ring-1 shadow-sm ${colors[status]} uppercase tracking-wide`}
+        className={`px-2 py-1 rounded-full text-xs font-semibold ring-1 shadow-sm ${colors[status] || colors.pending} uppercase tracking-wide`}
       >
         {status.charAt(0).toUpperCase() + status.slice(1)}
       </span>
@@ -549,12 +626,19 @@ const handleSignup = async (e) => {
             </div>
             <div>
               <h2 className="text-3xl font-bold text-gray-900">Admin Dashboard</h2>
-              <p className="text-gray-600">Managing projects in {userData.state}</p>
+              <p className="text-gray-600">
+                {userData.admin_level === "central" 
+                  ? "Managing projects requiring central approval" 
+                  : `Managing projects in ${userData.state}`}
+              </p>
             </div>
           </div>
           <div className="mb-8 p-6 rounded-2xl bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200/50">
             <p className="text-gray-700 text-lg">
-              🔧 Manage all projects submitted in your state. Total Projects (All): {projects.length} | Filtered by State: {adminProjects.length}
+              🔧 {userData.admin_level === "central" 
+                  ? "Manage projects submitted by state admins requiring central approval." 
+                  : "Manage projects submitted by employees in your state requiring approval."} 
+              Total Projects: {adminProjects.length}
             </p>
           </div>
 
@@ -596,14 +680,15 @@ const handleSignup = async (e) => {
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-gray-500">Status:</span>
-                          {getStatusBadge(project.status)}
+                          {getStatusBadge(project.statusLabel || project.status)}
                         </div>
                       </div>
                     </div>
                   </div>
 
                   <div className="flex flex-wrap gap-3">
-                    {project.status === "pending" && (
+                    {((project.status === "pending" && userData.role === 'admin' && userData.admin_level === 'state') || 
+                     (project.status === "pending central approval" && userData.role === 'admin' && userData.admin_level === 'central')) && (
                       <>
                         <button
                           onClick={() => handleProjectAction(project.id, "approved")}
@@ -612,7 +697,7 @@ const handleSignup = async (e) => {
                           <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                           </svg>
-                          Approve
+                          {project.status === 'pending' ? 'Approve (State)' : 'Approve (Central)'}
                         </button>
                         <button
                           onClick={() => handleProjectAction(project.id, "declined")}
@@ -913,27 +998,42 @@ const handleSignup = async (e) => {
                 </p>
                 {userData.email && (
                   <div className="flex justify-center flex-wrap gap-6">
-                    <button
-                      className="group relative px-8 py-4 rounded-2xl bg-white border-2 border-gray-200 text-gray-900 font-bold shadow-lg hover:shadow-xl hover:border-emerald-300 transition-all duration-200 transform hover:-translate-y-1"
-                      onClick={() => setModals({ ...modals, project: true })}
-                    >
-                      <span className="relative flex items-center gap-3">
+                    {/* Show Create Project button only for non-central admins */}
+                    {(userData.role !== 'admin' || userData.admin_level !== 'central') && (
+                      <button
+                        className="group relative px-8 py-4 rounded-2xl bg-white border-2 border-gray-200 text-gray-900 font-bold shadow-lg hover:shadow-xl hover:border-emerald-300 transition-all duration-200 transform hover:-translate-y-1"
+                        onClick={() => setModals({ ...modals, project: true })}
+                      >
+                        <span className="relative flex items-center gap-3">
+                          <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                          </svg>
+                          Create New Project
+                        </span>
+                        <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 opacity-0 group-hover:opacity-5 transition-opacity duration-200"></div>
+                      </button>
+                    )}
+                    
+                    {/* Show My Projects button only for non-central admins */}
+                    {(userData.role !== 'admin' || userData.admin_level !== 'central') && (
+                      <button
+                        className="px-8 py-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold shadow-lg hover:shadow-xl hover:from-emerald-700 hover:to-teal-700 transition-all duration-200 transform hover:-translate-y-1 flex items-center gap-3"
+                        onClick={() => setShowProjects(true)}
+                      >
                         <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                         </svg>
-                        Create New Project
-                      </span>
-                      <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 opacity-0 group-hover:opacity-5 transition-opacity duration-200"></div>
-                    </button>
-                    <button
-                      className="px-8 py-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold shadow-lg hover:shadow-xl hover:from-emerald-700 hover:to-teal-700 transition-all duration-200 transform hover:-translate-y-1 flex items-center gap-3"
-                      onClick={() => setShowProjects(true)}
-                    >
-                      <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                      </svg>
-                      My Projects
-                    </button>
+                        My Projects
+                      </button>
+                    )}
+                    
+                    {/* Show Approval Queue button for central admins */}
+                    {userData.role === 'admin' && userData.admin_level === 'central' && (
+                      <div className="text-center">
+                        <h3 className="text-lg font-semibold text-gray-700 mb-2">Central Admin Dashboard</h3>
+                        <p className="text-gray-600">Review and approve pending projects</p>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -996,16 +1096,27 @@ const handleSignup = async (e) => {
                     <p className="text-lg font-semibold text-gray-900 capitalize">{userData.role}</p>
                   </div>
                   {userData.role === "admin" && (
-                    <div className="p-6 rounded-2xl bg-gradient-to-br from-purple-50 to-pink-50 border border-purple-200/50 hover:border-purple-300 transition-all duration-200 md:col-span-2">
-                      <div className="flex items-center gap-3 mb-2">
-                        <svg className="h-5 w-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                        </svg>
-                        <span className="text-sm font-semibold text-purple-600 uppercase tracking-wide">Admin State</span>
+                    <>
+                      <div className="p-6 rounded-2xl bg-gradient-to-br from-purple-50 to-pink-50 border border-purple-200/50 hover:border-purple-300 transition-all duration-200">
+                        <div className="flex items-center gap-3 mb-2">
+                          <svg className="h-5 w-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                          </svg>
+                          <span className="text-sm font-semibold text-purple-600 uppercase tracking-wide">Admin State</span>
+                        </div>
+                        <p className="text-lg font-semibold text-gray-900">{userData.state}</p>
                       </div>
-                      <p className="text-lg font-semibold text-gray-900">{userData.state}</p>
-                    </div>
+                      <div className="p-6 rounded-2xl bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-200/50 hover:border-indigo-300 transition-all duration-200">
+                        <div className="flex items-center gap-3 mb-2">
+                          <svg className="h-5 w-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+                          </svg>
+                          <span className="text-sm font-semibold text-indigo-600 uppercase tracking-wide">Admin Level</span>
+                        </div>
+                        <p className="text-lg font-semibold text-gray-900 capitalize">{userData.admin_level || "Not Set"}</p>
+                      </div>
+                    </>
                   )}
                 </div>
               </section>
@@ -1238,6 +1349,7 @@ const handleSignup = async (e) => {
                       name="role" 
                       className="w-full p-4 border border-gray-200 rounded-2xl bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 text-gray-700" 
                       required
+                      onChange={(e) => setSelectedRole(e.target.value)}
                     >
                       <option value="">Select Role</option>
                       <option value="employee">Employee</option>
@@ -1258,6 +1370,20 @@ const handleSignup = async (e) => {
                     </select>
                   </div>
                 </div>
+                {selectedRole === "admin" && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-semibold text-gray-700">Admin Level</label>
+                    <select 
+                      name="admin_level" 
+                      className="w-full p-4 border border-gray-200 rounded-2xl bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 text-gray-700" 
+                      required
+                    >
+                      <option value="">Select Admin Level</option>
+                      <option value="state">State</option>
+                      <option value="central">Central</option>
+                    </select>
+                  </div>
+                )}
                 <div className="flex gap-4 pt-4">
                   <button 
                     type="submit" 
@@ -1271,7 +1397,10 @@ const handleSignup = async (e) => {
                   <button 
                     type="button"
                     className="px-6 py-4 rounded-2xl border border-gray-200 text-gray-700 hover:bg-gray-50 transition-all duration-200 font-semibold"
-                    onClick={() => setModals({ ...modals, signup: false })}
+                    onClick={() => {
+                      setModals({ ...modals, signup: false });
+                      setSelectedRole("");
+                    }}
                   >
                     Cancel
                   </button>

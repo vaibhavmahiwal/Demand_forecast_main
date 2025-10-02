@@ -1,55 +1,54 @@
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
+
+// Fix for default marker icon issue with webpack
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: require('leaflet/dist/images/marker-icon-2x.png'),
+  iconUrl: require('leaflet/dist/images/marker-icon.png'),
+  shadowUrl: require('leaflet/dist/images/marker-shadow.png'),
+});
+
 
 const Map = () => {
-  const mapRef = useRef(null);
-
-  // Define the coordinates for major Indian cities
+  // Coordinates are now in [lat, lng] array format for Leaflet
+  const centerOfIndia = [22.5937, 78.9629];
+  
+  // Coordinates for major Indian cities
   const majorCities = [
-    { name: 'Delhi', position: { lat: 28.7041, lng: 77.1025 } },
-    { name: 'Mumbai', position: { lat: 19.0760, lng: 72.8777 } },
-    { name: 'Kolkata', position: { lat: 22.5726, lng: 88.3639 } },
-    { name: 'Chennai', position: { lat: 13.0827, lng: 80.2707 } },
-    { name: 'Bengaluru', position: { lat: 12.9716, lng: 77.5946 } },
-    { name: 'Hyderabad', position: { lat: 17.3850, lng: 78.4867 } },
-    { name: 'Ahmedabad', position: { lat: 23.0225, lng: 72.5714 } },
-    { name: 'Pune', position: { lat: 18.5204, lng: 73.8567 } }
+    { name: 'Delhi', position: [28.7041, 77.1025] },
+    { name: 'Mumbai', position: [19.0760, 72.8777] },
+    { name: 'Kolkata', position: [22.5726, 88.3639] },
+    { name: 'Chennai', position: [13.0827, 80.2707] },
+    { name: 'Bengaluru', position: [12.9716, 77.5946] },
+    { name: 'Hyderabad', position: [17.3850, 78.4867] },
+    { name: 'Ahmedabad', position: [23.0225, 72.5714] },
+    { name: 'Pune', position: [18.5204, 73.8567] }
   ];
 
-  useEffect(() => {
-    if (window.google && mapRef.current) {
-      // Coordinates for the center of India
-      const centerOfIndia = { lat: 22.5937, lng: 78.9629 };
-      
-      const map = new window.google.maps.Map(mapRef.current, {
-        zoom: 5, // A good zoom level to see the country
-        center: centerOfIndia,
-        disableDefaultUI: true, // Optional: Hides the default map controls for a cleaner look
-      });
+  return (
+    <MapContainer 
+      center={centerOfIndia} 
+      zoom={5} 
+      style={{ height: '450px', width: '100%' }}
+      className="rounded-2xl"
+    >
+      <TileLayer
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+      />
 
-      // Define a custom icon for the markers
-      // Using a small, simple red dot from a public domain source.
-      // You can replace this URL with your own custom image if you prefer.
-      const redDotIcon = {
-        url: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png', // A standard red pushpin icon
-        // You can adjust the size if needed, but this default works well for visibility
-        // size: new window.google.maps.Size(32, 32), 
-        // origin: new window.google.maps.Point(0, 0),
-        // anchor: new window.google.maps.Point(16, 32) // Anchor the bottom-center of the icon
-      };
-
-      // Loop through the cities and create a marker for each
-      majorCities.forEach(city => {
-        new window.google.maps.Marker({
-          position: city.position,
-          map: map,
-          title: city.name,
-          icon: redDotIcon, // Assign the custom icon here
-        });
-      });
-    }
-  }, []); 
-
-  return <div ref={mapRef} style={{ height: '450px', width: '100%' }} className="rounded-2xl" />;
+      {majorCities.map(city => (
+        <Marker key={city.name} position={city.position}>
+          <Popup>
+            {city.name}
+          </Popup>
+        </Marker>
+      ))}
+    </MapContainer>
+  );
 };
 
 export default Map;

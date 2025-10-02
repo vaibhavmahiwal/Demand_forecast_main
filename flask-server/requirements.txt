@@ -1,0 +1,10 @@
+Flask
+flask-bcrypt
+flask-cors
+flask-sqlalchemy
+onnxruntime
+joblib
+numpy
+pandas
+scikit-learn
+

@@ -27,8 +27,13 @@ load_dotenv(BASE_DIR / '.env')
 app = Flask(__name__)
 CORS(app) 
 
-# Configure Database from environment variable (PostgreSQL)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
+# Configure Database - Use SQLite for development if no DATABASE_URL is set
+database_url = os.environ.get('DATABASE_URL')
+if not database_url:
+    # Use SQLite as fallback for development
+    database_url = 'sqlite:///demand_forecast.db'
+    
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'FALLBACK_NEVER_USE_THIS_IN_PROD') 
 
@@ -69,7 +74,8 @@ class User(db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(128), nullable=False)
     role = db.Column(db.String(20), nullable=False) # 'employee' or 'admin'
-    state = db.Column(db.String(50), nullable=False) # Admin's state oversight
+    state = db.Column(db.String(50), nullable=True) # Admin's state oversight
+    admin_level = db.Column(db.String(20), nullable=True) # 'state' or 'central' for admins, None for employees
     
 
 class Project(db.Model):
@@ -82,7 +88,7 @@ class Project(db.Model):
     geo = db.Column(db.String(100), nullable=False) # Increased from 50
     taxes = db.Column(db.String(100), nullable=False) # Increased from 50
     
-    status = db.Column(db.String(20), default='pending', nullable=False) 
+    status = db.Column(db.String(50), default='pending', nullable=False)  # Increased to handle "pending central approval" 
     created_at = db.Column(db.String(50), nullable=False) 
     
     created_by_email = db.Column(db.String(120), db.ForeignKey('user.email'), nullable=False)
@@ -249,15 +255,33 @@ def signup():
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
+    role = data.get('role')
+    
+    # Validation
+    if not all([email, password, role]):
+        return jsonify({"message": "Missing required fields"}), 400
+        
+    if role == 'admin' and not data.get('admin_level'):
+        return jsonify({"message": "Admin level is required for admin users"}), 400
+        
+    if role == 'admin' and not data.get('state'):
+        return jsonify({"message": "State is required for admin users"}), 400
     
     if User.query.filter_by(email=email).first():
         return jsonify({"message": "User already exists"}), 409
 
     hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
     
+    # Only set admin_level for admin users
+    admin_level = data.get('admin_level') if role == 'admin' else None
+    
     new_user = User(
-        name=data.get('name'), email=email, password_hash=hashed_password, 
-        role=data.get('role'), state=data.get('state')
+        name=data.get('name'), 
+        email=email, 
+        password_hash=hashed_password,
+        role=role,
+        state=data.get('state'),
+        admin_level=admin_level
     )
     
     try:
@@ -270,7 +294,13 @@ def signup():
     
     return jsonify({
         "message": "User created successfully",
-        "user": { "email": new_user.email, "name": new_user.name, "role": new_user.role, "state": new_user.state }
+        "user": { 
+            "email": new_user.email, 
+            "name": new_user.name, 
+            "role": new_user.role, 
+            "state": new_user.state, 
+            "admin_level": new_user.admin_level 
+        }
     }), 201
 
 @app.route('/api/auth/login', methods=['POST'])
@@ -284,13 +314,11 @@ def login():
     if user and bcrypt.check_password_hash(user.password_hash, password):
         return jsonify({
             "message": "Login successful",
-            "user": { "email": user.email, "name": user.name, "role": user.role, "state": user.state }
+            "user": { "email": user.email, "name": user.name, "role": user.role, "state": user.state, "admin_level": user.admin_level }
         }), 200
     
     return jsonify({"message": "Invalid credentials"}), 401
 
-
-# --- API Routes: Unified Project Management (CRUD + Prediction) ---
 
 # --- API Routes: Unified Project Management (CRUD + Prediction) ---
 
@@ -309,25 +337,48 @@ def project_management(project_id=None):
         if not user:
             return jsonify({"message": "User not found or email missing."}), 404
         
-        # 2. Filter logic based on user role
+        # 2. Filter logic based on user role and admin level
         if user.role == 'admin':
-            # Admin View: Return all projects whose location belongs to the admin's state.
-            
-            # Get all cities that belong to the admin's state using the map
-            admin_state = user.state
-            cities_in_admin_state = [
-                city for city, state in CITY_TO_STATE_MAP.items() if state == admin_state
-            ]
-            
-            # Query the database for projects in those cities
-            if cities_in_admin_state:
-                projects = Project.query.filter(
-                    Project.location.in_(cities_in_admin_state)
-                ).all()
-            else:
-                projects = [] # No cities mapped to this state
+            if user.admin_level == 'state':
+                # State Admin View: Return both pending projects in their state AND their own projects
+                admin_state = user.state
+                cities_in_admin_state = [
+                    city for city, state in CITY_TO_STATE_MAP.items() if state == admin_state
+                ]
                 
-            logging.info(f"Admin {user_email} fetching {len(projects)} projects for state {admin_state}.")
+                # Get projects in their state with status "pending" (created by employees)
+                if cities_in_admin_state:
+                    # Get projects that need state admin approval
+                    pending_projects = Project.query.filter(
+                        Project.location.in_(cities_in_admin_state),
+                        Project.status == "pending"
+                    )
+                    
+                    # Get projects created by this state admin
+                    admin_projects = Project.query.filter(
+                        Project.created_by_email == user_email
+                    )
+                    
+                    # Combine both queries
+                    projects = pending_projects.union(admin_projects).all()
+                else:
+                    # If no cities found for state, just show admin's own projects
+                    projects = Project.query.filter_by(created_by_email=user_email).all()
+                    
+                logging.info(f"State Admin {user_email} fetching {len(projects)} projects for state {admin_state}.")
+                
+            elif user.admin_level == 'central':
+                # Central Admin View: Only show projects that need central approval
+                projects = Project.query.filter(
+                    Project.status == "pending central approval"
+                ).order_by(Project.created_at.desc()).all()
+                
+                logging.info(f"Central Admin {user_email} fetching {len(projects)} projects pending central approval.")
+                
+            else:
+                # Fallback for admins without admin_level set
+                projects = []
+                logging.warning(f"Admin {user_email} has no admin_level set.")
 
         else: # Employee View: Return only projects created by this employee.
             projects = Project.query.filter_by(created_by_email=user_email).all()
@@ -353,30 +404,46 @@ def project_management(project_id=None):
         if not project_to_update:
             return jsonify({"message": f"Project ID {project_id} not found."}), 404
 
-        # --- STATE-BASED AUTHORIZATION ---
+        # --- ENHANCED AUTHORIZATION LOGIC ---
         # 1. Check if the user is an admin
         if not user or user.role != 'admin':
               return jsonify({"message": "Unauthorized: Only administrators can update project status."}), 403
         
-        # 2. Check state authorization only for approval/decline actions
+        # 2. Prevent self-approval
+        if project_to_update.created_by_email == email:
+            return jsonify({"message": "Authorization failed: Cannot approve your own projects."}), 403
+        
+        # 3. Check authorization based on project status and admin level
         if new_status in ['approved', 'declined']:
             project_state = get_state_from_city(project_to_update.location)
             
-            # Enforce that the admin's state must match the project's state
-            if user.state != project_state:
-                logging.warning(f"Admin {email} in {user.state} attempted to action project in {project_state}.")
-                return jsonify({"message": "Authorization failed: Admin state must match project state to proceed."}), 403
-        # --- END STATE-BASED AUTHORIZATION ---
-
-        project_to_update.status = new_status
-        try:
-            db.session.commit()
-            logging.info(f"Project ID {project_id} status updated to {new_status} by admin {email}.")
-            return jsonify({"message": f"Project status updated to {new_status}"}), 200
-        except SQLAlchemyError as e:
-            db.session.rollback()
-            logging.error(f"Database error during project update: {e}")
-            return jsonify({"message": "Database error during project update"}), 500
+            # For projects with status "pending" (created by employees)
+            if project_to_update.status == "pending":
+                # Only state admins from the same state can approve employee projects
+                if user.admin_level != "state" or user.state != project_state:
+                    logging.warning(f"Admin {email} (level: {user.admin_level}, state: {user.state}) attempted to action employee project in {project_state}.")
+                    return jsonify({"message": "Authorization failed: Only state admins from the same state can approve employee projects."}), 403
+            
+            # For projects with status "pending central approval" (created by state admins)
+            elif project_to_update.status == "pending central approval":
+                # Only central admins can approve state admin projects
+                if user.admin_level != "central":
+                    logging.warning(f"Admin {email} (level: {user.admin_level}) attempted to action state admin project.")
+                    return jsonify({"message": "Authorization failed: Only central admins can approve state admin projects."}), 403
+                    
+            # Update project status
+            project_to_update.status = new_status
+            try:
+                db.session.commit()
+                logging.info(f"Project ID {project_id} status updated to {new_status} by admin {email}.")
+                return jsonify({"message": f"Project {new_status} successfully"}), 200
+            except SQLAlchemyError as e:
+                db.session.rollback()
+                logging.error(f"Database error updating project status: {e}")
+                return jsonify({"message": "Error updating project status"}), 500
+        else:
+            return jsonify({"message": "Invalid status or unauthorized action"}), 400
+        # --- END ENHANCED AUTHORIZATION LOGIC ---
 
     # ====================================================================
     # POST: Create a new project (Prediction + Save to DB)
@@ -388,6 +455,13 @@ def project_management(project_id=None):
         
         if not input_features or not project_details:
             return jsonify({"error": "Missing input features or project details."}), 400
+            
+        # Check if user is a central admin
+        creator_email = project_details.get('createdBy')
+        if creator_email:
+            creator = User.query.filter_by(email=creator_email).first()
+            if creator and creator.role == 'admin' and creator.admin_level == 'central':
+                return jsonify({"error": "Central administrators are not allowed to create projects."}), 403
 
         # --- DEBUG: Print incoming data before prediction attempt ---
         logging.info(f"Attempting prediction for user: {project_details.get('createdBy')}")
@@ -420,6 +494,16 @@ def project_management(project_id=None):
         # 2. Save Project to Database
         forecast_json_string = json.dumps(all_predictions) 
 
+        # Determine status based on user role and admin level
+        creator = User.query.filter_by(email=project_details['createdBy']).first()
+        status = 'pending'  # Default for regular users
+        
+        if creator and creator.role == 'admin':
+            if creator.admin_level == 'state':
+                status = 'pending central approval'
+            elif creator.admin_level == 'central':
+                status = 'approved'
+        
         # IMPORTANT: Ensure the values passed here match the SQLAlchemy model's constraints (String/length)
         new_project = Project(
             # Pass original input strings/values for database save (no float conversion needed here)
@@ -429,7 +513,7 @@ def project_management(project_id=None):
             substation_type=input_features['substationType'], 
             geo=input_features['geo'], 
             taxes=input_features['taxes'],
-            status=project_details['status'], 
+            status=status, 
             created_at=project_details['createdAt'], 
             created_by_email=project_details['createdBy'], 
             forecast_data=forecast_json_string
