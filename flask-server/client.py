@@ -1,21 +1,22 @@
-
 import requests
 import json
+import datetime
 
-# Define the URL of your Flask server's new endpoint
-# 🚨 CHANGE 1: The URL is now for the '/predict_all' endpoint
-FLASK_SERVER_URL = "http://localhost:5000/predict_all"
+# 🚨 CHANGE 1: Update URL to the new unified API endpoint
+# The Flask app runs on port 5002 (as specified in app.py) and the route is /api/projects
+FLASK_SERVER_URL = "http://localhost:5002/api/projects"
 
-def get_all_predictions(project_data):
+def get_all_predictions_and_save(project_data):
     """
-    Sends a JSON payload to the Flask server's new endpoint
-    and prints the received predictions for all 7 models.
+    Sends a payload to the Flask server's unified endpoint to run predictions
+    AND save the project data to the database.
     
     Args:
         project_data (dict): A dictionary containing project features.
     """
-    # The JSON payload structure must match what app.py expects.
-    # The 'input_features' key contains all the data required by the models.
+    
+    # 🚨 CHANGE 2: Structure the payload to match the new Flask POST handler
+    # The new Flask endpoint expects 'input_features' for ML, and 'project_details' for DB save.
     payload = {
         "input_features": {
             "budget": project_data["budget"],
@@ -24,38 +25,55 @@ def get_all_predictions(project_data):
             "substationType": project_data["substationType"],
             "geo": project_data["geo"],
             "taxes": project_data["taxes"],
+        },
+        "project_details": {
+            # These fields are required by the Project database model
+            "createdBy": project_data["createdBy"],
+            "status": project_data["status"],
+            "createdAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
     }
     
+    print(f"Sending POST request to: {FLASK_SERVER_URL}")
+    print("--- Payload ---")
+    print(json.dumps(payload, indent=4))
+
     try:
-        # The requests.post() function sends a POST request.
         response = requests.post(FLASK_SERVER_URL, json=payload)
-        
-        # Raise an HTTPError for bad responses (4xx or 5xx)
         response.raise_for_status()
         
-        # 🚨 CHANGE 2: The response is now a dictionary of predictions
-        all_predictions = response.json()
+        server_response = response.json()
         
-        # Print the results
-        print("Success! Predictions for all 7 models received:")
-        # Use json.dumps to pretty-print the dictionary for readability
-        print(json.dumps(all_predictions, indent=4))
+        # 🚨 CHANGE 3: Response now contains the created 'project' object with forecasts
+        print("\n✅ Success! Project Created and Forecasted:")
+        print(json.dumps(server_response, indent=4))
         
+    except requests.exceptions.HTTPError as e:
+        print(f"\n❌ HTTP Error: {e}")
+        try:
+            error_data = response.json()
+            print("Server Error Details:", json.dumps(error_data, indent=4))
+        except:
+            print("Could not decode error response from server.")
     except requests.exceptions.RequestException as e:
-        print(f"Error connecting to the Flask server: {e}")
+        print(f"\n❌ Error connecting to the Flask server: {e}")
     except json.JSONDecodeError:
-        print("Error decoding JSON from the server response.")
+        print("\n❌ Error decoding JSON from the server response.")
 
 if __name__ == "__main__":
-    # Example project data from your application.
+    # Example project data, now including DB fields like 'createdBy' and 'status'
+    # These mimic the data sent by the handleCreateProject function in your React app.
     new_project_data = {
         "budget": "10000000",
         "towerType": "400 kV", 
         "taxes": "18% GST",
         "location": "Bengaluru",
         "substationType": "AIS (Air Insulated Substation)",
-        "geo": "Urban",
+        "geo": "urban",
+        
+        # New fields for database
+        "createdBy": "test.employee@company.com", 
+        "status": "pending",
     }
     
-    get_all_predictions(new_project_data)
+    get_all_predictions_and_save(new_project_data)

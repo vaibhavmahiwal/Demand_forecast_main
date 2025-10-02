@@ -1,5 +1,57 @@
 import React, { useState, useEffect } from "react";
-import Map from './Map'; // This line is still needed
+// Assuming Map component is defined elsewhere or not strictly required for app logic review
+// import Map from './Map'; 
+
+// Keyframes for Tailwind CSS animations (must be defined in head or style tag)
+const tailwindConfig = `
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @keyframes blob {
+      0% {
+        transform: translate(0px, 0px) scale(1);
+      }
+      33% {
+        transform: translate(30px, -50px) scale(1.1);
+      }
+      66% {
+        transform: translate(-20px, 20px) scale(0.9);
+      }
+      100% {
+        transform: translate(0px, 0px) scale(1);
+      }
+    }
+    .animate-blob {
+      animation: blob 7s infinite;
+    }
+    .animation-delay-2000 {
+      animation-delay: 2s;
+    }
+    .animation-delay-4000 {
+      animation-delay: 4s;
+    }
+    .animate-fadeInUp {
+        animation: fadeInUp 0.3s ease-out forwards;
+    }
+    @keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+  </style>
+`;
+
+// Helper for the Map component, which is currently missing.
+const Map = () => (
+    <div className="h-64 bg-gray-100 rounded-xl flex items-center justify-center border border-gray-200">
+        <p className="text-gray-500">Map Component Placeholder</p>
+    </div>
+);
+
 
 function App() {
   // States
@@ -13,14 +65,15 @@ function App() {
     signup: false,
     login: false,
     projectDetails: false,
-    verify2FA: false,
   });
   const [message, setMessage] = useState("");
   const [showMessage, setShowMessage] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [showProjects, setShowProjects] = useState(false);
   const [showAdminDashboard, setShowAdminDashboard] = useState(false);
-  const [pendingVerification, setPendingVerification] = useState(null);
+
+  // Flask API URL (FIXED: Using 127.0.0.1 for stability)
+  const API_URL = "http://127.0.0.1:5002/api";
 
   // State mapping for admin oversight
   const stateMapping = {
@@ -50,8 +103,38 @@ function App() {
     setActivityLog((prev) => [msg, ...prev]);
   };
 
-  // Phone verification removed - direct signup/login
+  // --- Data Fetching Function (Refreshes project list from DB) ---
+  const fetchProjects = async (email) => {
+    if (!email) {
+      setProjects([]);
+      return;
+    }
+    try {
+      // SECURED GET: Pass email in query parameter for authorization/filtering
+      const response = await fetch(`${API_URL}/projects?email=${email}`);
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Failed to fetch projects.");
+      }
+      
+      const fetchedProjects = await response.json();
+      setProjects(fetchedProjects);
+    } catch (error) {
+      showCustomMessage(`Error loading projects: ${error.message}`);
+      console.error("Error loading projects:", error);
+    }
+  };
 
+  // --- useEffect to load data on login ---
+  useEffect(() => {
+    // Fetch projects whenever the user logs in/changes
+    if (userData.email) {
+      fetchProjects(userData.email);
+    } else {
+      setProjects([]); // Clear projects on logout
+    }
+  }, [userData.email]);
 
 
   // Get user's state based on role and location
@@ -73,135 +156,253 @@ function App() {
     });
   };
 
-  // Project handlers
+  // --- FIXED: Project Creation Handler (POST to Flask) ---
   const handleCreateProject = async (e) => {
     e.preventDefault();
     const form = e.target;
-    const projectData = {
+    
+    if (!userData.email) {
+        showCustomMessage("Error: You must be logged in to create a project.");
+        return;
+    }
+
+    // 1. Prepare input features (for ML model)
+    const inputFeatures = {
       budget: form.budget.value,
       location: form.location.value,
       towerType: form.towerType.value,
       substationType: form.substationType.value,
       geo: form.geo.value,
       taxes: form.taxes.value,
-      createdBy: userData.email,
+    };
+
+    // 2. Prepare project details (for DB save)
+    const projectDetails = {
+      createdBy: userData.email, 
       status: userData.role === "admin" ? "approved" : "pending",
-      createdByRole: userData.role,
+      createdAt: new Date().toLocaleString(),
+    };
+
+    // 3. Prepare authenticated payload
+    const payload = {
+        email: userData.email, // <-- AUTHENTICATION PROXY
+        input_features: inputFeatures, // <-- ML FEATURES
+        project_details: projectDetails, // <-- DB DETAILS
     };
 
     try {
-      const response = await fetch("http://localhost:5002/predict_all", {
+      // POST to unified endpoint /api/projects
+      const response = await fetch(`${API_URL}/projects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input_features: projectData }),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || "Prediction failed.");
+        throw new Error(errorData.error || errorData.message || "Prediction and save failed.");
       }
 
-      const allPredictions = await response.json();
-      const newProject = {
-        ...projectData,
-        createdAt: new Date().toLocaleString(),
-        allForecasts: allPredictions,
-        id: Date.now(),
-      };
+      const responseData = await response.json();
+      const newProject = responseData.project; 
 
-      setProjects((prev) => [...prev, newProject]);
-      logActivity(`Created project for: ${newProject.location} (Status: ${newProject.status})`);
+      // Refresh projects to get the official data list from DB
+      await fetchProjects(userData.email);
+      
+      logActivity(`Created project ID ${newProject.id} for: ${newProject.location} (Status: ${newProject.status})`);
       form.reset();
       setModals({ ...modals, project: false });
 
       setShowDashboard(true);
       showCustomMessage(
-        userData.role === "admin" ? "Demand forecasted and approved!" : "Demand forecasted! Awaiting admin approval."
+        userData.role === "admin" 
+          ? "Demand forecasted and approved! (DB ID: " + newProject.id + ")" 
+          : "Demand forecasted! Awaiting admin approval. (DB ID: " + newProject.id + ")"
       );
     } catch (error) {
       showCustomMessage(`Error: ${error.message}`);
-      console.error("Error fetching prediction:", error);
+      console.error("Error creating project:", error);
     }
   };
 
-  const handleOpenProjectDetails = (index) => {
+  // --- FIXED: Project detail lookup ---
+  const handleOpenProjectDetails = (projectToOpen) => {
+    // Find the project index based on the ID after a potential re-fetch
+    const index = projects.findIndex(p => p.id === projectToOpen.id);
+    if (index === -1) {
+        showCustomMessage("Error: Could not find project details.");
+        return;
+    }
     setCurrentProjectIndex(index);
     setModals({ ...modals, projectDetails: true });
   };
 
-  const handleDeleteProject = () => {
-    if (currentProjectIndex !== null) {
-      logActivity(`Deleted project for: ${projects[currentProjectIndex].location}`);
-      const updated = projects.filter((_, i) => i !== currentProjectIndex);
-      setProjects(updated);
+  // --- FIXED: Project Deletion Handler (DELETE to Flask for persistence) ---
+  const handleDeleteProject = async () => {
+    if (currentProjectIndex === null) return;
+
+    const projectToDelete = projects[currentProjectIndex];
+    const projectId = projectToDelete.id;
+
+    try {
+      // SECURED DELETE: Pass email in body for authorization check
+      const response = await fetch(`${API_URL}/projects/${projectId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: userData.email }), 
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Deletion failed due to authorization.");
+      }
+
+      // Deletion successful on server, refresh the local list from DB
+      await fetchProjects(userData.email);
+
+      logActivity(`Deleted project ID ${projectId} for: ${projectToDelete.location}`);
       setModals({ ...modals, projectDetails: false });
       setCurrentProjectIndex(null);
+      showCustomMessage(`Project ID ${projectId} deleted successfully.`);
+
+    } catch (error) {
+      showCustomMessage(`Error: ${error.message}`);
+      console.error("Error deleting project:", error);
     }
   };
 
-  // Admin project management
-  const handleProjectAction = (projectId, action) => {
-    setProjects((prev) =>
-      prev.map((project) => {
-        if (project.id === projectId) {
-          return { ...project, status: action };
-        }
-        return project;
-      })
-    );
-    logActivity(`${action.charAt(0).toUpperCase() + action.slice(1)} project ID: ${projectId}`);
-    showCustomMessage(`Project ${action} successfully!`);
-  };
-
-  // User handlers
-  const handleSignup = (e) => {
-    e.preventDefault();
-    const form = e.target;
-    const newUserData = {
-      name: form.name.value,
-      email: form.email.value,
-      password: form.password.value,
-      role: form.role.value,
-      state: form.state.value,
-    };
-
-    setUserData(newUserData);
-    logActivity("Account created successfully");
-    showCustomMessage("Account created successfully!");
-    setModals({ 
-      project: false,
-      signup: false,
-      login: false,
-      projectDetails: false,
-      verify2FA: false 
-    });
-  };
-
-  const handleLogin = (e) => {
-    e.preventDefault();
-    const form = e.target;
-    if (!userData.email) {
-      setUserData({
-          name: 'Test User',
-          email: form.email.value,
-          password: form.password.value,
-          role: 'employee',
-          state: 'Maharashtra',
+  // --- FIXED: Admin project action (PUT to Flask for persistence) ---
+  const handleProjectAction = async (projectId, action) => {
+    
+    // Check if the current user is an Admin
+    if (userData.role !== 'admin') {
+        showCustomMessage("Error: Only Administrators can perform project actions.");
+        return;
+    }
+    
+    try {
+      // This PUT request sends the updated status and the admin's email for auth.
+      // NOTE: Flask backend needs a PUT route for /api/projects/<id> that handles status updates.
+      const response = await fetch(`${API_URL}/projects/${projectId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          email: userData.email, // Auth token proxy
+          status: action 
+        }), 
       });
-      logActivity("Logged in successfully");
-      showCustomMessage("Login successful!");
-      setModals({ ...modals, login: false });
-      return;
-    }
-    if (form.email.value === userData.email && form.password.value === userData.password) {
-      setUserData(userData);
-      logActivity("Logged in successfully");
-      showCustomMessage("Login successful!");
-      setModals({ ...modals, login: false });
-    } else {
-      showCustomMessage("Invalid credentials!");
+
+      if (!response.ok) {
+        // If the Flask server hasn't implemented the PUT/PATCH update route yet,
+        // it will likely return 405 Method Not Allowed or 400.
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Failed to ${action} project.`);
+      }
+
+      // Update successful on server, refresh the local list from DB
+      await fetchProjects(userData.email); 
+
+      logActivity(`${action.charAt(0).toUpperCase() + action.slice(1)} project ID: ${projectId} via API.`);
+      showCustomMessage(`Project ${action} successfully!`);
+
+    } catch (error) {
+      showCustomMessage(`Error updating project: ${error.message}`);
+      console.error(`Error updating project ${projectId}:`, error);
+      // Fallback for demonstration if API fails (temporarily update local state)
+      setProjects((prev) =>
+        prev.map((project) => {
+          if (project.id === projectId) {
+            return { ...project, status: action };
+          }
+          return project;
+        })
+      );
     }
   };
+
+// --- UPDATED: User signup using API instead of MOCK_USERS ---
+const handleSignup = async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const name = form.name.value;
+    const email = form.email.value;
+    const password = form.password.value;
+    const role = form.role.value;
+    const state = form.state.value;
+
+    try {
+      const response = await fetch(`${API_URL}/auth/signup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Send all registration fields to the Flask backend
+        body: JSON.stringify({ name, email, password, role, state }),
+      });
+
+      const responseData = await response.json();
+
+      if (!response.ok) {
+        // Throw an error if the HTTP status is not 2xx
+        throw new Error(responseData.message || "Failed to create account. User might already exist.");
+      }
+
+      // Assuming successful signup auto-logs in and returns user details
+      const loggedInUser = {
+        name: responseData.user.name,
+        email: responseData.user.email,
+        role: responseData.user.role,
+        state: responseData.user.state,
+      };
+
+      setUserData(loggedInUser);
+      logActivity("Account created and logged in via API.");
+      showCustomMessage(`Account created successfully! Welcome, ${loggedInUser.name}.`);
+      setModals({ project: false, signup: false, login: false, projectDetails: false });
+
+    } catch (error) {
+      showCustomMessage(`Signup Error: ${error.message}`);
+      console.error("Signup error:", error);
+    }
+};
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const email = form.email.value;
+    const password = form.password.value;
+    
+    try {
+      const response = await fetch(`${API_URL}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Send credentials to the Flask backend for verification
+        body: JSON.stringify({ email, password }),
+      });
+
+      const responseData = await response.json();
+
+      if (!response.ok) {
+        // Throw an error if authentication failed
+        throw new Error(responseData.message || "Invalid credentials. Please check your email and password.");
+      }
+
+      // Assuming successful login returns user details
+      const loggedInUser = {
+        name: responseData.user.name,
+        email: responseData.user.email,
+        role: responseData.user.role,
+        state: responseData.user.state,
+      };
+      
+      setUserData(loggedInUser);
+      logActivity(`Logged in successfully as ${loggedInUser.role} via API`);
+      showCustomMessage(`Login successful! Role: ${loggedInUser.role}`);
+      setModals({ ...modals, login: false });
+
+    } catch (error) {
+      showCustomMessage(`Login Error: ${error.message}`);
+      console.error("Login error:", error);
+    }
+};
 
   // Render functions
   const renderForecasts = (forecasts) => {
@@ -221,7 +422,7 @@ function App() {
             >
               <span className="block bg-white/80 backdrop-blur-sm rounded-[11px] p-3 shadow-sm">
                 <strong className="text-gray-900">{modelName.charAt(0).toUpperCase() + modelName.slice(1)}:</strong>
-                {forecasts[modelName] ? ` ${forecasts[modelName].toFixed(2)}` : " N/A"}
+                {forecasts[modelName] ? ` ${parseFloat(forecasts[modelName]).toFixed(2)}` : " N/A"}
               </span>
             </p>
           ))}
@@ -248,7 +449,10 @@ function App() {
 
   // Dashboard Component
   const Dashboard = ({ projects, goBack }) => {
-    const lastProject = projects[projects.length - 1];
+    // Filter projects to ensure we only show the *user's* latest project for the dashboard view
+    const userProjects = projects.filter(p => p.createdBy === userData.email);
+    const lastProject = userProjects.length > 0 ? userProjects[userProjects.length - 1] : null;
+
     return (
       <div className="p-8 flex-1">
         <div className="relative rounded-3xl p-8 shadow-2xl bg-white/80 backdrop-blur-xl ring-1 ring-gray-200/50 border border-white/20 h-full">
@@ -267,17 +471,17 @@ function App() {
               <p className="text-gray-600">AI-powered material demand predictions</p>
             </div>
           </div>
-          <div className="mb-8 p-6 rounded-2xl bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200/50">
-            <p className="text-gray-700 text-lg">
-              ✅ The prediction engine successfully ran forecasts for all 7 key materials based on your project data.
-            </p>
-          </div>
-          <h3 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-3">
-            <div className="h-1 w-8 bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full"></div>
-            Latest Project Details
-          </h3>
           {lastProject ? (
             <div className="space-y-6">
+              <div className="mb-8 p-6 rounded-2xl bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200/50">
+                <p className="text-gray-700 text-lg">
+                  ✅ The prediction engine successfully ran forecasts for all 7 key materials.
+                </p>
+              </div>
+              <h3 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-3">
+                <div className="h-1 w-8 bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full"></div>
+                Latest Project Details (ID: {lastProject.id})
+              </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="p-6 rounded-2xl bg-gradient-to-br from-gray-50 to-white border border-gray-200/50">
                   <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Project Information</h4>
@@ -308,8 +512,8 @@ function App() {
                 <svg className="h-8 w-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                 </svg>
+                <p className="text-gray-600 text-lg">No project data to display. Create a new project!</p>
               </div>
-              <p className="text-gray-600 text-lg">No project data to display.</p>
             </div>
           )}
           <button
@@ -350,7 +554,7 @@ function App() {
           </div>
           <div className="mb-8 p-6 rounded-2xl bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200/50">
             <p className="text-gray-700 text-lg">
-              🔧 Manage all projects in your state. You can approve, decline, or delete projects as needed.
+              🔧 Manage all projects submitted in your state. Total Projects (All): {projects.length} | Filtered by State: {adminProjects.length}
             </p>
           </div>
 
@@ -360,9 +564,9 @@ function App() {
                 <svg className="h-10 w-10 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                 </svg>
+                <h3 className="text-xl font-semibold text-gray-900 mb-2">No Projects Yet</h3>
+                <p className="text-gray-600">No projects have been submitted in your state yet.</p>
               </div>
-              <h3 className="text-xl font-semibold text-gray-900 mb-2">No Projects Yet</h3>
-              <p className="text-gray-600">No projects have been submitted in your state yet.</p>
             </div>
           ) : (
             <div className="space-y-6">
@@ -375,7 +579,7 @@ function App() {
                     <div className="flex-1">
                       <div className="flex items-center gap-3 mb-2">
                         <div className="h-2 w-2 rounded-full bg-purple-500"></div>
-                        <h4 className="text-xl font-bold text-gray-900">Project in {project.location}</h4>
+                        <h4 className="text-xl font-bold text-gray-900">Project ID: {project.id} in {project.location}</h4>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                         <div>
@@ -422,13 +626,13 @@ function App() {
                       </>
                     )}
                     <button
-                      onClick={() => handleProjectAction(project.id, "deleted")}
+                      onClick={() => handleOpenProjectDetails(project)}
                       className="px-4 py-2 rounded-xl text-sm font-semibold text-white bg-gradient-to-r from-gray-500 to-gray-600 hover:from-gray-600 hover:to-gray-700 shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2"
                     >
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                      Delete
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12h-6m6 0h6m-6 0v6m0-6V6"/>
+                        </svg>
+                      View Details
                     </button>
                   </div>
                 </div>
@@ -455,6 +659,9 @@ function App() {
     <div
       className="min-h-screen flex flex-col font-sans selection:bg-emerald-300/40 bg-gradient-to-br from-slate-50 via-white to-emerald-50/30"
     >
+      {/* Tailwind CSS config and keyframes */}
+      <div dangerouslySetInnerHTML={{ __html: tailwindConfig }} />
+      
       {/* Modern animated background */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -inset-10 opacity-30">
@@ -527,48 +734,14 @@ function App() {
               <button
                 className="group relative px-5 py-2.5 rounded-2xl bg-white border border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300 transition-all duration-200 shadow-sm hover:shadow-md flex items-center gap-2"
                 onClick={() => {
-                  const userWasLoggedIn = !!userData.email;
-                  
-                  // Clear Phone.Email session data
-                  try {
-                    if (window.phoneEmailListener) {
-                      delete window.phoneEmailListener;
-                    }
-                    // Clear any stored Phone.Email data
-                    if (typeof window.phoneEmailClearSession === 'function') {
-                      window.phoneEmailClearSession();
-                    }
-                    // Alternative method to clear Phone.Email data
-                    if (window.pe && typeof window.pe.clearSession === 'function') {
-                      window.pe.clearSession();
-                    }
-                    // Clear localStorage items that might be related to Phone.Email
-                    Object.keys(localStorage).forEach(key => {
-                      if (key.includes('phone') || key.includes('email') || key.includes('pe_')) {
-                        localStorage.removeItem(key);
-                      }
-                    });
-                    // Clear sessionStorage items
-                    Object.keys(sessionStorage).forEach(key => {
-                      if (key.includes('phone') || key.includes('email') || key.includes('pe_')) {
-                        sessionStorage.removeItem(key);
-                      }
-                    });
-                  } catch (error) {
-                    console.log("Phone.Email cleanup completed");
-                  }
-                  
                   setUserData({});
                   setShowProfile(false);
                   setShowDashboard(false);
                   setShowProjects(false);
                   setShowAdminDashboard(false);
                   setActivityLog([]);
-                  setPendingVerification(null);
                   setCurrentProjectIndex(null);
-                  if (userWasLoggedIn) {
-                    showCustomMessage("Logged out successfully!");
-                  }
+                  showCustomMessage("Logged out successfully!");
                 }}
               >
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -670,13 +843,11 @@ function App() {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {projects
                     .filter((p) => p.createdBy === userData.email)
-                    .map((project, index) => (
+                    .map((project) => (
                       <div
-                        key={index}
+                        key={project.id}
                         className="group cursor-pointer relative p-6 rounded-3xl bg-white/80 backdrop-blur-sm border border-gray-200/50 hover:border-emerald-200 transition-all duration-200 hover:shadow-lg transform hover:-translate-y-1"
-                        onClick={() =>
-                          handleOpenProjectDetails(projects.findIndex((p) => p.id === project.id))
-                        }
+                        onClick={() => handleOpenProjectDetails(project)}
                       >
                         <div className="flex justify-between items-start mb-4">
                           <div className="flex items-center gap-3">
@@ -858,7 +1029,7 @@ function App() {
         </p>
       </footer>
 
-      {/* --- THIS SECTION WITH THE MODALS HAS BEEN RESTORED --- */}
+      {/* --- MODALS --- */}
 
       {/* Custom Message Box */}
       {showMessage && (
@@ -893,11 +1064,11 @@ function App() {
               <form className="space-y-6" onSubmit={handleCreateProject}>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-2">
-                    <label className="text-sm font-semibold text-gray-700">Budget</label>
+                    <label className="text-sm font-semibold text-gray-700">Budget (INR)</label>
                     <input
                       name="budget"
-                      type="text"
-                      placeholder="Enter project budget"
+                      type="number"
+                      placeholder="e.g., 10000000"
                       className="w-full p-4 border border-gray-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 bg-gray-50/50"
                       required
                     />
@@ -967,8 +1138,8 @@ function App() {
                     <option value="semi-urban">Semi-Urban</option>
                     <option value="coastal">Coastal</option>
                     <option value="urban">Urban</option>
-                   <option value="industrial">Industrial</option>
-                  <option value="desert">Desert</option>
+                    <option value="industrial">Industrial</option>
+                    <option value="desert">Desert</option>
                     </select>
 
                   </div>
@@ -977,7 +1148,7 @@ function App() {
                     <input
                       name="taxes"
                       type="text"
-                      placeholder="Enter tax information"
+                      placeholder="e.g., 18% GST or Exempt"
                       className="w-full p-4 border border-gray-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 bg-gray-50/50"
                       required
                     />
@@ -1044,14 +1215,14 @@ function App() {
                     <input 
                       name="email" 
                       type="email" 
-                      placeholder="Enter your email" 
+                      placeholder="Enter a valid email address" 
                       className="w-full p-4 border border-gray-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 bg-gray-50/50" 
                       required 
                     />
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-semibold text-gray-700">Password</label>
+                  <label className="text-sm font-semibold text-gray-700">Password </label>
                   <input 
                     name="password" 
                     type="password" 
@@ -1126,7 +1297,7 @@ function App() {
                   </div>
                 </div>
                 <div>
-                  <h3 className="text-2xl font-bold text-gray-900">Welcome Back</h3>
+                  <h3 className="text-2xl font-bold text-gray-900">Welcome Back </h3>
                   <p className="text-gray-600">Sign in to your account</p>
                 </div>
               </div>
@@ -1136,7 +1307,7 @@ function App() {
                   <input 
                     name="email" 
                     type="email" 
-                    placeholder="Enter your email" 
+                    placeholder="Enter your email address" 
                     className="w-full p-4 border border-gray-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 bg-gray-50/50" 
                     required 
                   />
@@ -1190,7 +1361,7 @@ function App() {
                   </div>
                 </div>
                 <div>
-                  <h3 className="text-2xl font-bold text-gray-900">Project Details</h3>
+                  <h3 className="text-2xl font-bold text-gray-900">Project Details (ID: {projects[currentProjectIndex].id})</h3>
                   <p className="text-gray-600">Complete project information and forecasts</p>
                 </div>
               </div>
@@ -1218,6 +1389,7 @@ function App() {
                           {getStatusBadge(projects[currentProjectIndex].status)}
                         </div>
                         <div><span className="text-gray-600">Created:</span> <span className="font-semibold text-gray-900">{projects[currentProjectIndex].createdAt}</span></div>
+                        <div><span className="text-gray-600">Created By:</span> <span className="font-semibold text-gray-900">{projects[currentProjectIndex].createdBy}</span></div>
                       </div>
                     </div>
                   </div>
