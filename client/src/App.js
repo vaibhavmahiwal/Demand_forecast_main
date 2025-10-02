@@ -1,12 +1,6 @@
 import React, { useState, useEffect } from "react";
-// Assuming Map component is defined elsewhere or not strictly required for app logic review
-// import Map from './Map'; 
-<<<<<<< HEAD
-
-
-=======
 import Map from './Map';
->>>>>>> f89a08dda8fb8576cb016c4b73305680782d2a45
+
 // Keyframes for Tailwind CSS animations (must be defined in head or style tag)
 const tailwindConfig = `
   <script src="https://cdn.tailwindcss.com"></script>
@@ -50,7 +44,6 @@ const tailwindConfig = `
   </style>
 `;
 
-<Map />
 function App() {
   // States
   const [userData, setUserData] = useState({});
@@ -70,6 +63,7 @@ function App() {
   const [showProjects, setShowProjects] = useState(false);
   const [showAdminDashboard, setShowAdminDashboard] = useState(false);
   const [selectedRole, setSelectedRole] = useState("");
+  const [selectedAdminLevel, setSelectedAdminLevel] = useState("");
 
   // Flask API URL (FIXED: Using 127.0.0.1 for stability)
   const API_URL = "http://127.0.0.1:5002/api";
@@ -1346,26 +1340,36 @@ const handleSignup = async (e) => {
                       name="role" 
                       className="w-full p-4 border border-gray-200 rounded-2xl bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 text-gray-700" 
                       required
-                      onChange={(e) => setSelectedRole(e.target.value)}
+                      value={selectedRole}
+                      onChange={(e) => {
+                        setSelectedRole(e.target.value);
+                        if (e.target.value !== 'admin') {
+                          setSelectedAdminLevel('');
+                        }
+                      }}
                     >
                       <option value="">Select Role</option>
                       <option value="employee">Employee</option>
                       <option value="admin">Admin</option>
                     </select>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-semibold text-gray-700">State</label>
-                    <select 
-                      name="state" 
-                      className="w-full p-4 border border-gray-200 rounded-2xl bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 text-gray-700" 
-                      required
-                    >
-                      <option value="">Select State</option>
-                      {Object.keys(stateMapping).map((state) => (
-                        <option key={state} value={state}>{state}</option>
-                      ))}
-                    </select>
-                  </div>
+                  {selectedRole === 'admin' && selectedAdminLevel === 'central' ? (
+                    <input type="hidden" name="state" value="" />
+                  ) : (
+                    <div className="space-y-2">
+                      <label className="text-sm font-semibold text-gray-700">State</label>
+                      <select 
+                        name="state" 
+                        className="w-full p-4 border border-gray-200 rounded-2xl bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 text-gray-700" 
+                        required={selectedAdminLevel !== 'central'}
+                      >
+                        <option value="">Select State</option>
+                        {Object.keys(stateMapping).map((state) => (
+                          <option key={state} value={state}>{state}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
                 {selectedRole === "admin" && (
                   <div className="space-y-2">
@@ -1374,6 +1378,8 @@ const handleSignup = async (e) => {
                       name="admin_level" 
                       className="w-full p-4 border border-gray-200 rounded-2xl bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 text-gray-700" 
                       required
+                      value={selectedAdminLevel}
+                      onChange={(e) => setSelectedAdminLevel(e.target.value)}
                     >
                       <option value="">Select Admin Level</option>
                       <option value="state">State</option>
@@ -1397,6 +1403,7 @@ const handleSignup = async (e) => {
                     onClick={() => {
                       setModals({ ...modals, signup: false });
                       setSelectedRole("");
+                      setSelectedAdminLevel("");
                     }}
                   >
                     Cancel
