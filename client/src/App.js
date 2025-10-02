@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from "react";
 // Assuming Map component is defined elsewhere or not strictly required for app logic review
 // import Map from './Map'; 
+<<<<<<< HEAD
 
 
+=======
+import Map from './Map';
+>>>>>>> f89a08dda8fb8576cb016c4b73305680782d2a45
 // Keyframes for Tailwind CSS animations (must be defined in head or style tag)
 const tailwindConfig = `
   <script src="https://cdn.tailwindcss.com"></script>
@@ -46,14 +50,7 @@ const tailwindConfig = `
   </style>
 `;
 
-// Helper for the Map component, which is currently missing.
-const Map = () => (
-    <div className="h-64 bg-gray-100 rounded-xl flex items-center justify-center border border-gray-200">
-        <p className="text-gray-500">Map Component Placeholder</p>
-    </div>
-);
-
-
+<Map />
 function App() {
   // States
   const [userData, setUserData] = useState({});
