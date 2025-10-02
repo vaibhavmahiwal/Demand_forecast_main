@@ -1032,8 +1032,8 @@ const handleSignup = async (e) => {
 
             {!userData.email && (
               <section className="mx-auto max-w-7xl px-6 -mt-8 relative z-10">
-                <div className="w-full md:w-2/3 ml-auto p-6 rounded-3xl bg-white/80 backdrop-blur-xl ring-1 ring-gray-200/50 border border-white/20 shadow-2xl">
-                  <div className="flex items-center gap-3 mb-4">
+                <div className="w-full max-w-4xl mx-auto p-6 rounded-3xl bg-white/80 backdrop-blur-xl ring-1 ring-gray-200/50 border border-white/20 shadow-2xl">
+                  <div className="flex items-center justify-center gap-3 mb-4">
                     <div className="h-8 w-8 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 flex items-center justify-center">
                       <svg className="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
@@ -1042,7 +1042,11 @@ const handleSignup = async (e) => {
                     </div>
                     <h3 className="text-lg font-bold text-gray-900">Project Locations</h3>
                   </div>
-                  <Map />
+                  <div className="w-full flex justify-center">
+                    <div className="w-full max-w-3xl">
+                      <Map />
+                    </div>
+                  </div>
                 </div>
               </section>
             )}
