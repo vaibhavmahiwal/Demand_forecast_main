@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from dotenv import load_dotenv 
 import logging
 from sqlalchemy import Text # Import Text type
+from typing import Dict, Optional, Union
 
 # Configure basic logging for visibility
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -40,6 +41,31 @@ bcrypt = Bcrypt(app)
 # Initialize Flask-Migrate
 from flask_migrate import Migrate
 migrate = Migrate(app, db)
+
+# --- Whitelist Configuration for Admin Logins ---
+# This dictionary maps the REQUIRED email to the REQUIRED admin_level/state combination.
+# The database user record MUST match this to pass the login check.
+# The value is a tuple: (admin_level, state_or_central_identifier)
+
+ADMIN_LOGIN_WHITELIST: Dict[str, Union[tuple[str, str], tuple[str, None]]] = {
+    # Central Admin (Can log in with this specific email only if admin_level is 'central')
+    "centraladmin@gov.com": ("central", "Central"), 
+    
+    # State Admins (Can log in with this specific email only if admin_level is 'state' and state is the specified one)
+    "delhiadmin@gmail.com": ("state", "Delhi"),
+    "upadmin@gmail.com": ("state", "Uttar Pradesh"),
+    "mhadmin@gmail.com": ("state", "Maharashtra"),
+    "kaadmin@gmail.com": ("state", "Karnataka"),
+    "tnadmin@gmail.com": ("state", "Tamil Nadu"),
+    "wbadmin@gmail.com": ("state", "West Bengal"),
+    "rjadmin@gmail.com": ("state", "Rajasthan"),
+    "gjadmin@gmail.com": ("state", "Gujarat"),
+    "tsadmin@gmail.com": ("state", "Telangana"),
+    # Add other specific admin emails here...
+}
+# --- End Whitelist Configuration ---
+
+
 CITY_TO_STATE_MAP = {
     "Lucknow": "Uttar Pradesh", 
     "Kanpur": "Uttar Pradesh", 
@@ -116,7 +142,7 @@ class Project(db.Model):
         }
 
 
-# --- Model Loading ---
+# --- Model Loading (NO CHANGE) ---
 
 MODEL_ASSET_MAPPING = {
     "steel": { "onnx": "steel_model.onnx", "scaler": "scaler_steel.joblib", "columns": "model_columns_steel.joblib", },
@@ -135,7 +161,7 @@ for model_name, paths in MODEL_ASSET_MAPPING.items():
     try:
         # Check if assets exist before loading
         if not all(Path(p).exists() for p in paths.values()):
-             raise FileNotFoundError(f"Missing one or more model files in the current directory.")
+              raise FileNotFoundError(f"Missing one or more model files in the current directory.")
 
         session = ort.InferenceSession(paths["onnx"]) 
         scaler = joblib.load(paths["scaler"])
@@ -155,21 +181,11 @@ if not LOADED_MODELS:
     logging.critical("FATAL: No models were loaded successfully. Predictions will fail.")
 
 
-# --- Feature Mapping and Engineering Function (Enhanced Error Handling) ---
+# --- Feature Mapping and Engineering Function (NO CHANGE) ---
 
 def create_feature_vector(input_data, columns):
     """
     Transforms raw input data into a feature vector matching the model's expected columns.
-    
-    Args:
-        input_data (dict): Raw input features from the frontend.
-        columns (list): List of column names (features) expected by the ML model.
-        
-    Returns:
-        list: An ordered list of float features ready for scaling and prediction.
-        
-        Raises:
-            ValueError: If a critical field is missing or malformed during conversion.
     """
     feature_vector = {col: 0.0 for col in columns}
     logging.debug(f"Target columns size: {len(columns)}")
@@ -251,7 +267,7 @@ def create_feature_vector(input_data, columns):
     return [feature_vector[col] for col in columns]
 
 
-# --- API Routes: Authentication (No Changes) ---
+# --- API Routes: Authentication (SIGNUP NO CHANGE) ---
 
 @app.route('/api/auth/signup', methods=['POST'])
 def signup():
@@ -316,16 +332,50 @@ def login():
     
     user = User.query.filter_by(email=email).first()
     
+    # 1. Primary Authentication: Check if user exists and password is correct
     if user and bcrypt.check_password_hash(user.password_hash, password):
+        
+        # 2. Authorization Check: Enforce whitelist for 'admin' roles
+        if user.role == 'admin':
+            
+            # Check if the user's email is on the specific admin whitelist
+            if user.email not in ADMIN_LOGIN_WHITELIST:
+                logging.warning(f"Admin login failed: Email {user.email} not in whitelist.")
+                return jsonify({"message": "Unauthorized admin access."}), 403
+            
+            required_level, required_state = ADMIN_LOGIN_WHITELIST[user.email]
+            
+            # Check if the user's recorded attributes match the required whitelist entry
+            if user.admin_level != required_level:
+                 logging.warning(f"Admin login failed for {user.email}: Level mismatch (DB: {user.admin_level} | Required: {required_level}).")
+                 return jsonify({"message": "Invalid credentials or unauthorized level."}), 403
+
+            # State-specific check: The user's stored 'state' must match the required state identifier.
+            # This handles both State Admins (e.g., 'Delhi') and Central Admin ('Central')
+            if user.state != required_state:
+                 logging.warning(f"Admin login failed for {user.email}: State mismatch (DB: {user.state} | Required: {required_state}).")
+                 return jsonify({"message": "Invalid credentials or unauthorized state access."}), 403
+            
+            # If all admin checks pass, proceed
+            logging.info(f"Admin {user.email} logged in successfully.")
+            
+        # 3. Successful Login (for Employee or Whitelisted Admin)
         return jsonify({
             "message": "Login successful",
-            "user": { "email": user.email, "name": user.name, "role": user.role, "state": user.state, "admin_level": user.admin_level }
+            "user": { 
+                "email": user.email, 
+                "name": user.name, 
+                "role": user.role, 
+                "state": user.state, 
+                "admin_level": user.admin_level 
+            }
         }), 200
     
+    # 4. Failed Login (User not found or password incorrect)
     return jsonify({"message": "Invalid credentials"}), 401
 
 
-# --- API Routes: Unified Project Management (CRUD + Prediction) ---
+# --- API Routes: Unified Project Management (NO CHANGE) ---
 
 @app.route("/api/projects", methods=["GET", "POST"])
 @app.route("/api/projects/<int:project_id>", methods=["DELETE", "PUT"])
@@ -412,7 +462,7 @@ def project_management(project_id=None):
         # --- ENHANCED AUTHORIZATION LOGIC ---
         # 1. Check if the user is an admin
         if not user or user.role != 'admin':
-              return jsonify({"message": "Unauthorized: Only administrators can update project status."}), 403
+             return jsonify({"message": "Unauthorized: Only administrators can update project status."}), 403
         
         # 2. Prevent self-approval
         if project_to_update.created_by_email == email:
@@ -507,7 +557,7 @@ def project_management(project_id=None):
             if creator.admin_level == 'state':
                 status = 'pending central approval'
             elif creator.admin_level == 'central':
-                status = 'approved'
+                status = 'approved' # Central admin projects are auto-approved
         
         # IMPORTANT: Ensure the values passed here match the SQLAlchemy model's constraints (String/length)
         new_project = Project(
