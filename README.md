@@ -205,6 +205,3 @@ Pull requests and contributions are welcome!
 
 For support or inquiries, please open an issue or contact the repository maintainer.
 
----
-
-Would you like this saved as a downloadable `.md` file or auto-formatted in a GitHub repo?
