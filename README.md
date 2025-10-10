@@ -1,7 +1,3 @@
-Here's a **beautified and polished `README.md`** version for **Precision Grid Analytics**, optimized for readability, consistency, and professional presentation — ideal for GitHub or any code repository:
-
----
-
 # 📊 Precision Grid Analytics
 
 **Material Demand Forecasting Web Application**
@@ -208,3 +204,4 @@ For support or inquiries, please open an issue or contact the repository maintai
 ---
 
 Would you like this saved as a downloadable `.md` file or auto-formatted in a GitHub repo?
+
